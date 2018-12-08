@@ -1,0 +1,166 @@
+name: LWJGL Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+env:
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  S3_PARAMS: --cache-control "public,must-revalidate,proxy-revalidate,max-age=0"
+  JEMALLOC_PARAMS: --with-jemalloc-prefix=je_ --disable-stats --disable-fill --disable-cxx
+
+jobs:
+  linux:
+    name: Linux
+    runs-on: ubuntu-18.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ARCH: [x64, arm32, arm64, mips64]
+        include:
+          # -----
+          - ARCH: x64
+            PACKAGES:
+            CC:
+            EXTRA_PARAMS:
+            HOST: x86_64-pc-linux-gnu
+            STRIP: strip
+          # -----
+          - ARCH: arm32
+            PACKAGES: gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
+            CC: CC=arm-linux-gnueabihf-gcc
+            EXTRA_PARAMS:
+            HOST: arm-unknown-linux-gnueabihf
+            STRIP: arm-linux-gnueabihf-strip
+          # -----
+          - ARCH: arm64
+            PACKAGES: gcc-aarch64-linux-gnu
+            CC: CC=aarch64-linux-gnu-gcc
+            EXTRA_PARAMS:
+            HOST: aarch64-unknown-linux-gnu
+            STRIP: aarch64-linux-gnu-strip
+          # -----
+          - ARCH: mips64
+            PACKAGES: gcc-mips64el-linux-gnuabi64
+            CC: CC=mips64el-linux-gnuabi64-gcc
+            EXTRA_PARAMS: --with-lg-page=14
+            HOST: mips64el-unknown-linux-gnu
+            STRIP: mips64el-linux-gnuabi64-strip
+    env:
+      LWJGL_ARCH: ${{matrix.ARCH}}
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 3
+      - run: sudo apt-get -yq install ${{matrix.PACKAGES}}
+        name: Install dependencies
+        if: ${{matrix.PACKAGES != ''}}
+      - run: |
+          ${{matrix.CC}} CFLAGS="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0" ./autogen.sh ${{env.JEMALLOC_PARAMS}} ${{matrix.EXTRA_PARAMS}} --disable-initial-exec-tls --host=${{matrix.HOST}}
+        name: Configure build
+      - run: |
+          make
+          ${{matrix.STRIP}} lib/libjemalloc.so
+        name: Build
+      - run: aws s3 cp lib/libjemalloc.so s3://lwjgl-build/nightly/linux/${{matrix.ARCH}}/ $S3_PARAMS
+        name: Upload artifact
+      - run: |
+          git log --first-parent --pretty=format:%H HEAD~2..HEAD~1 > libjemalloc.so.git
+          aws s3 cp libjemalloc.so.git s3://lwjgl-build/nightly/linux/${{matrix.ARCH}}/ $S3_PARAMS
+        name: Upload git revision
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ARCH: [x64, arm64]
+        include:
+          - ARCH: x64
+            CC: EXTRA_CFLAGS=-mmacosx-version-min=10.9 LDFLAGS=-mmacosx-version-min=10.9
+            HOST: x86_64
+            EXTRA_PARAMS:
+          - ARCH: arm64
+            CC: SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path) MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version) EXTRA_CFLAGS="-target aarch64-apple-darwin -arch arm64 -mmacosx-version-min=11.0" LDFLAGS="-target aarch64-apple-darwin -arch arm64 -mmacosx-version-min=11.0"
+            HOST: aarch64
+            EXTRA_PARAMS: --with-lg-page=14
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 3
+      - run: |
+          ${{matrix.CC}} ./autogen.sh ${{env.JEMALLOC_PARAMS}} --disable-initial-exec-tls --disable-zone-allocator --target ${{matrix.ARCH}}-apple-darwin20 --host=${{matrix.HOST}}-apple-darwin20 ${{matrix.EXTRA_PARAMS}}
+        name: Configure build
+      - run: |
+          ${{matrix.CC}} make
+          strip -u -r lib/libjemalloc.dylib
+        name: Build
+      - run: aws s3 cp lib/libjemalloc.dylib s3://lwjgl-build/nightly/macosx/${{matrix.ARCH}}/ $S3_PARAMS
+        name: Upload artifact
+      - run: |
+          git log --first-parent --pretty=format:%H HEAD~2..HEAD~1 > libjemalloc.dylib.git
+          aws s3 cp libjemalloc.dylib.git s3://lwjgl-build/nightly/macosx/${{matrix.ARCH}}/ $S3_PARAMS
+        name: Upload git revision
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ARCH: [x86, x64, arm64]
+        include:
+          - ARCH: x86
+            MSVC_ARCH: amd64_x86
+            HOST: i686-pc-cygwin
+            CFLAGS:
+          - ARCH: x64
+            MSVC_ARCH: amd64
+            HOST: x86_64-w64-cygwin
+            CFLAGS:
+          - ARCH: arm64
+            MSVC_ARCH: amd64_arm64
+            HOST: aarch64-w64-cygwin
+            CFLAGS: /D__aarch64__
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 3
+      - id: cygwin-cache
+        uses: actions/cache@v2
+        with:
+          path: C:\cygwin
+          key: cygwin-cache
+      - run: |
+          choco install cygwin -x86 --params "/InstallDir:C:\cygwin"
+          choco install cyg-get
+          cyg-get autoconf make
+        if: steps.cygwin-cache.outputs.cache-hit != 'true'
+        name: Install dependencies
+      - run: C:\cygwin\bin\sh -lc "(cd $OLDPWD;)"
+        shell: cmd
+        name: Prepare Cygwin
+      - run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{matrix.MSVC_ARCH}}
+          C:\cygwin\bin\sh -lc "(cd $OLDPWD; set -o igncr; autoconf;)"
+          C:\cygwin\bin\sh -lc "(cd $OLDPWD; set -o igncr; CFLAGS='/EHsc /GF /Gy /GL /GR- /GS- /MP /DNDEBUG ${{matrix.CFLAGS}}' CC=cl ac_cv_c_bigendian=no ./configure --host=${{matrix.HOST}} ${{env.JEMALLOC_PARAMS}};)"
+        shell: cmd
+        name: Configure build
+      - run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{matrix.MSVC_ARCH}}
+          C:\cygwin\bin\sh -lc "(cd $OLDPWD; set -o igncr; make;)"
+        shell: cmd
+        name: Build
+      - run: aws s3 cp lib\jemalloc.dll s3://lwjgl-build/nightly/windows/${{matrix.ARCH}}/ ${{env.S3_PARAMS}}
+        shell: cmd
+        name: Upload artifact
+      - run: |
+          git log --first-parent --pretty=format:%%H HEAD~2..HEAD~1 > jemalloc.dll.git
+          aws s3 cp jemalloc.dll.git s3://lwjgl-build/nightly/windows/${{matrix.ARCH}}/ ${{env.S3_PARAMS}}
+        shell: cmd
+        name: Upload git revision
