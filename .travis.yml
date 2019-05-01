@@ -9,23 +9,24 @@ env:
 language: c
 compiler: gcc
 
-#addons:
-#  apt:
+addons:
+  apt:
 #    sources:
 #    - ubuntu-toolchain-r-test
-#    packages:
-#    - gcc-7
+    packages:
+    - gcc-arm-linux-gnueabihf
+    - libc6-dev-armhf-cross
 
 before_install:
 - pip install --user awscli
 - export PATH=$PATH:$HOME/.local/bin
 
 script:
-- "CFLAGS=\"-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0\" LDFLAGS=-Wl,--wrap,memcpy ./autogen.sh --with-jemalloc-prefix=je_ --disable-stats --disable-fill --disable-cxx --disable-initial-exec-tls"
+- "CC=\"arm-linux-gnueabihf-gcc\" CFLAGS=\"-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0\" LDFLAGS=-Wl,--wrap,memcpy ./autogen.sh --host=arm-linux-gnueabihf --with-jemalloc-prefix=je_ --disable-stats --disable-fill --disable-cxx --disable-initial-exec-tls"
 #- CC="gcc-7" make
 - make
 - cd lib
-- strip libjemalloc.so
-- "aws s3 cp libjemalloc.so s3://build.lwjgl.org/nightly/linux/x64/libjemalloc.so --acl public-read --cache-control \"public, must-revalidate, proxy-revalidate, max-age=0\""
+- arm-linux-gnueabihf-strip libjemalloc.so
+- "aws s3 cp libjemalloc.so s3://build.lwjgl.org/nightly/linux/arm32/libjemalloc.so --acl public-read --cache-control \"public, must-revalidate, proxy-revalidate, max-age=0\""
 - "git log --first-parent --pretty=format:%H HEAD~2..HEAD~1 > revision.git"
-- "aws s3 cp revision.git s3://build.lwjgl.org/nightly/linux/x64/libjemalloc.so.git --acl public-read --cache-control \"public, must-revalidate, proxy-revalidate, max-age=0\""
+- "aws s3 cp revision.git s3://build.lwjgl.org/nightly/linux/arm32/libjemalloc.so.git --acl public-read --cache-control \"public, must-revalidate, proxy-revalidate, max-age=0\""
