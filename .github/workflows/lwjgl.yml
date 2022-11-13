@@ -44,6 +44,13 @@ jobs:
             HOST: aarch64-unknown-linux-gnu
             STRIP: aarch64-linux-gnu-strip
           # -----
+          - ARCH: ppc64el
+            PACKAGES: gcc-powerpc64le-linux-gnu
+            CC: CC=powerpc64le-linux-gnu-gcc
+            EXTRA_PARAMS:
+            HOST: powerpc64le-unknown-linux-gnu
+            STRIP: powerpc64le-linux-gnu-strip
+          # -----
           - ARCH: mips64
             PACKAGES: gcc-mips64el-linux-gnuabi64
             CC: CC=mips64el-linux-gnuabi64-gcc
